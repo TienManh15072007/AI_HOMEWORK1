@@ -1,0 +1,279 @@
+{
+  "nbformat": 4,
+  "nbformat_minor": 0,
+  "metadata": {
+    "colab": {
+      "provenance": [],
+      "authorship_tag": "ABX9TyOqWcwi9DmdVGoWaqgP8EH6",
+      "include_colab_link": true
+    },
+    "kernelspec": {
+      "name": "python3",
+      "display_name": "Python 3"
+    },
+    "language_info": {
+      "name": "python"
+    }
+  },
+  "cells": [
+    {
+      "cell_type": "markdown",
+      "metadata": {
+        "id": "view-in-github",
+        "colab_type": "text"
+      },
+      "source": [
+        "<a href=\"https://colab.research.google.com/github/TienManh15072007/AI_HOMEWORK1/blob/main/app1.py\" target=\"_parent\"><img src=\"https://colab.research.google.com/assets/colab-badge.svg\" alt=\"Open In Colab\"/></a>"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "%%writefile app.py\n",
+        "import streamlit as st\n",
+        "import pandas as pd\n",
+        "import numpy as np\n",
+        "import re\n",
+        "import matplotlib.pyplot as plt\n",
+        "import seaborn as sns\n",
+        "from sklearn.preprocessing import StandardScaler\n",
+        "from sklearn.ensemble import RandomForestRegressor\n",
+        "from sklearn.model_selection import train_test_split\n",
+        "from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error\n",
+        "\n",
+        "# --- 1. CẤU HÌNH TRANG WEB ---\n",
+        "st.set_page_config(page_title=\"Triple Tea - Dự đoán giá trọ\", layout=\"wide\")\n",
+        "\n",
+        "st.title(\"🏠 Ứng dụng Dự đoán Giá thuê Trọ - Nhóm Triple Tea\")\n",
+        "st.markdown(\"---\")\n",
+        "\n",
+        "# --- 2. ĐỌC VÀ LÀM SẠCH DỮ LIỆU ---\n",
+        "file_path = '/content/content/Dự đoán giá thuê trọ (Câu trả lời).xlsx'\n",
+        "\n",
+        "@st.cache_data # Lưu bộ nhớ đệm để không phải đọc lại file mỗi khi chỉnh UI\n",
+        "def load_data():\n",
+        "    try:\n",
+        "        df = pd.read_excel(file_path)\n",
+        "    except:\n",
+        "        # Dữ liệu giả lập nếu không tìm thấy file\n",
+        "        df = pd.DataFrame({\n",
+        "            'Khoảng cách': [1.2, 2.5, 4.0, 1.0, 5.5, 3.2, 2.1, 1.8, 4.7, 3.9] * 20,\n",
+        "            'Diện tích': [18, 25, 35, 15, 45, 22, 30, 20, 40, 28] * 20,\n",
+        "            'Phường': ['P1', 'P2', 'P3', 'P1', 'P4', 'P2', 'P3', 'P1', 'P4', 'P2'] * 20,\n",
+        "            'Xung quanh trọ có các tiện ích nào?': ['Máy lạnh, Chợ', 'Siêu thị, Trạm xe buýt', 'Bếp riêng', 'WC riêng'] * 50,\n",
+        "            'Tổng giá thuê...': ['3.5 triệu', '4.5 triệu', '6.0 triệu', '3.2', '7.0', '4.2', '5.5', '3.8', '6.5', '4.8'] * 20\n",
+        "        })\n",
+        "    return df.drop_duplicates().copy()\n",
+        "\n",
+        "df_raw = load_data()\n",
+        "\n",
+        "# Hàm tìm cột thông minh\n",
+        "def find_col(df, keywords, default_idx):\n",
+        "    for i, col in enumerate(df.columns):\n",
+        "        if any(key.lower() in col.lower() for key in keywords): return col\n",
+        "    return df.columns[default_idx]\n",
+        "\n",
+        "km_col_raw = find_col(df_raw, ['khoảng cách', 'km'], 0)\n",
+        "size_col_raw = find_col(df_raw, ['diện tích', 'm2'], 1)\n",
+        "ward_col_raw = find_col(df_raw, ['phường', 'quận'], 2)\n",
+        "util_col_raw = find_col(df_raw, ['tiện ích'], 3)\n",
+        "price_col_raw = find_col(df_raw, ['giá thuê', 'tổng giá'], -1)\n",
+        "\n",
+        "# Làm sạch dữ liệu\n",
+        "df_clean = df_raw.copy()\n",
+        "def clean_price(text):\n",
+        "    if pd.isnull(text): return np.nan\n",
+        "    nums = re.findall(r\"[-+]?\\d*\\.\\d+|\\d+\", str(text).replace(',', '.'))\n",
+        "    if not nums: return np.nan\n",
+        "    val = float(nums[0])\n",
+        "    return val / 1000000 if val > 1000 else val\n",
+        "\n",
+        "df_clean[price_col_raw] = df_clean[price_col_raw].apply(clean_price)\n",
+        "df_clean[size_col_raw] = pd.to_numeric(df_clean[size_col_raw], errors='coerce')\n",
+        "df_clean = df_clean.dropna(subset=[price_col_raw, size_col_raw])\n",
+        "\n",
+        "# Feature Engineering\n",
+        "utils_list = ['Máy lạnh', 'WC riêng', 'Bếp riêng', 'Giờ giấc tự do', 'Chỗ để xe', 'Chợ', 'Trạm xe buýt', 'Siêu thị', 'Cửa hàng tiện lợi']\n",
+        "for u in utils_list:\n",
+        "    df_clean[u] = df_clean[util_col_raw].apply(lambda x: 1 if pd.notnull(x) and u.lower() in str(x).lower() else 0)\n",
+        "df_clean['Tổng tiện ích'] = df_clean[utils_list].sum(axis=1)\n",
+        "\n",
+        "# --- 3. HUẤN LUYỆN MÔ HÌNH ---\n",
+        "df_encoded = pd.get_dummies(df_clean, columns=[ward_col_raw], drop_first=True)\n",
+        "X_all = df_encoded.drop(columns=[price_col_raw, util_col_raw, 'Dấu thời gian'], errors='ignore')\n",
+        "X_all = X_all.select_dtypes(include=[np.number, 'bool'])\n",
+        "y_all = df_clean[price_col_raw]\n",
+        "MODEL_FEATURES = X_all.columns.tolist()\n",
+        "\n",
+        "X_train, X_test, y_train, y_test = train_test_split(X_all, y_all, test_size=0.2, random_state=42)\n",
+        "\n",
+        "scaler = StandardScaler()\n",
+        "cont_cols = [km_col_raw, size_col_raw, 'Tổng tiện ích']\n",
+        "X_train_scaled = X_train.copy()\n",
+        "X_train_scaled[cont_cols] = scaler.fit_transform(X_train[cont_cols])\n",
+        "\n",
+        "rf_model = RandomForestRegressor(n_estimators=300, max_depth=12, random_state=42)\n",
+        "rf_model.fit(X_train_scaled, y_train)\n",
+        "\n",
+        "# --- 4. GIAO DIỆN STREAMLIT (SIDEBAR NHẬP LIỆU) ---\n",
+        "with st.sidebar:\n",
+        "    st.header(\"📍 Thông tin phòng\")\n",
+        "    in_ward = st.selectbox(\"Chọn khu vực:\", sorted(df_clean[ward_col_raw].unique()))\n",
+        "    in_dist = st.slider(\"Khoảng cách (km):\", 0.1, 15.0, 1.0)\n",
+        "    in_size = st.number_input(\"Diện tích (m2):\", 5, 100, 20)\n",
+        "\n",
+        "    st.header(\"✨ Tiện ích\")\n",
+        "    user_utils = {}\n",
+        "    for u in utils_list:\n",
+        "        user_utils[u] = st.checkbox(u)\n",
+        "\n",
+        "# --- 5. HIỂN THỊ KẾT QUẢ VÀ TRỰC QUAN HÓA ---\n",
+        "tab1, tab2, tab3 = st.tabs([\"🚀 Dự đoán giá\", \"📊 Phân tích dữ liệu\", \"🎯 Hiệu năng mô hình\"])\n",
+        "\n",
+        "with tab1:\n",
+        "    col_res1, col_res2 = st.columns([1, 1])\n",
+        "\n",
+        "    # Chuẩn bị dữ liệu dự đoán\n",
+        "    input_df = pd.DataFrame(0, index=[0], columns=MODEL_FEATURES)\n",
+        "    input_df[km_col_raw] = in_dist\n",
+        "    input_df[size_col_raw] = in_size\n",
+        "    count_util = 0\n",
+        "    for u, val in user_utils.items():\n",
+        "        if u in input_df.columns:\n",
+        "            input_df[u] = 1 if val else 0\n",
+        "            count_util += 1 if val else 0\n",
+        "    input_df['Tổng tiện ích'] = count_util\n",
+        "\n",
+        "    w_col = f\"{ward_col_raw}_{in_ward}\"\n",
+        "    if w_col in input_df.columns:\n",
+        "        input_df[w_col] = 1\n",
+        "\n",
+        "    input_scaled = input_df.copy()\n",
+        "    input_scaled[cont_cols] = scaler.transform(input_df[cont_cols])\n",
+        "\n",
+        "    prediction = rf_model.predict(input_scaled)[0]\n",
+        "\n",
+        "    with col_res1:\n",
+        "        st.success(f\"### Dự báo giá thuê tại {in_ward}\")\n",
+        "        st.metric(\"Giá trọ ước tính\", f\"{prediction * 1000000:,.0f} VNĐ/tháng\")\n",
+        "        st.info(\"Giá trên đã bao gồm các tiện ích bạn đã chọn.\")\n",
+        "\n",
+        "    with col_res2:\n",
+        "        # Biểu đồ Top 10 Feature Importance\n",
+        "        importances = pd.Series(rf_model.feature_importances_, index=MODEL_FEATURES).sort_values().tail(10)\n",
+        "        fig_feat, ax_feat = plt.subplots()\n",
+        "        importances.plot(kind='barh', ax=ax_feat, color='forestgreen')\n",
+        "        ax_feat.set_title(\"Các yếu tố ảnh hưởng nhất\")\n",
+        "        st.pyplot(fig_feat)\n",
+        "\n",
+        "with tab2:\n",
+        "    col_v1, col_v2 = st.columns(2)\n",
+        "    with col_v1:\n",
+        "        st.write(\"### Ma trận tương quan\")\n",
+        "        fig_corr, ax_corr = plt.subplots()\n",
+        "        sns.heatmap(df_clean[[price_col_raw, size_col_raw, km_col_raw, 'Tổng tiện ích']].corr(), annot=True, cmap='RdYlGn', ax=ax_corr)\n",
+        "        st.pyplot(fig_corr)\n",
+        "\n",
+        "    with col_v2:\n",
+        "        st.write(\"### Phân bổ giá theo diện tích\")\n",
+        "        fig_scatter, ax_scatter = plt.subplots()\n",
+        "        sns.scatterplot(data=df_clean, x=size_col_raw, y=price_col_raw, hue=km_col_raw, ax=ax_scatter)\n",
+        "        st.pyplot(fig_scatter)\n",
+        "\n",
+        "with tab3:\n",
+        "    X_test_scaled = X_test.copy()\n",
+        "    X_test_scaled[cont_cols] = scaler.transform(X_test[cont_cols])\n",
+        "    y_pred = rf_model.predict(X_test_scaled)\n",
+        "\n",
+        "    st.write(f\"**R2 Score:** {r2_score(y_test, y_pred):.3f}\")\n",
+        "    st.write(f\"**MAE:** {mean_absolute_error(y_test, y_pred):.3f}\")\n",
+        "\n",
+        "    fig_perf, ax_perf = plt.subplots()\n",
+        "    ax_perf.scatter(y_test, y_pred, alpha=0.5)\n",
+        "    ax_perf.plot([y_all.min(), y_all.max()], [y_all.min(), y_all.max()], 'r--')\n",
+        "    ax_perf.set_xlabel(\"Thực tế (Triệu)\")\n",
+        "    ax_perf.set_ylabel(\"Dự đoán (Triệu)\")\n",
+        "    st.pyplot(fig_perf)\n",
+        "\n",
+        "if st.checkbox(\"Hiển thị dữ liệu mẫu\"):\n",
+        "    st.write(df_clean.head(20))\n"
+      ],
+      "metadata": {
+        "colab": {
+          "base_uri": "https://localhost:8080/"
+        },
+        "id": "WJyqltF_gPUs",
+        "outputId": "ab5b5193-fa7c-4395-a6cd-83bc6b16ebde"
+      },
+      "execution_count": 20,
+      "outputs": [
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "Overwriting app.py\n"
+          ]
+        }
+      ]
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "!curl ipv4.icanhazip.com"
+      ],
+      "metadata": {
+        "id": "OkEPnwH-CeGl",
+        "outputId": "dd78ca9e-9b63-4c9e-d48a-3f1b1e79479c",
+        "colab": {
+          "base_uri": "https://localhost:8080/"
+        }
+      },
+      "execution_count": 23,
+      "outputs": [
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "34.29.160.112\n"
+          ]
+        }
+      ]
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "!streamlit run app.py --server.enableCORS=false --server.enableXsrfProtection=false & npx localtunnel --port 8501"
+      ],
+      "metadata": {
+        "id": "iGCJjNt8CiW0",
+        "outputId": "c237ef95-844f-4386-ef55-4b3ece7dff6e",
+        "colab": {
+          "base_uri": "https://localhost:8080/"
+        }
+      },
+      "execution_count": 24,
+      "outputs": [
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "\u001b[1G\u001b[0K⠙\u001b[1G\u001b[0K⠹\u001b[1G\u001b[0K⠸\u001b[1G\u001b[0K⠼\n",
+            "Collecting usage statistics. To deactivate, set browser.gatherUsageStats to false.\n",
+            "\u001b[0m\n",
+            "\u001b[1G\u001b[0K⠴\u001b[1G\u001b[0K⠦\u001b[1G\u001b[0K⠧\u001b[1G\u001b[0K⠇\u001b[1G\u001b[0K⠏\u001b[1G\u001b[0K⠋\u001b[1G\u001b[0K⠙\u001b[1G\u001b[0Kyour url is: https://nine-mugs-lick.loca.lt\n",
+            "2026-05-08 14:42:33.438 Uvicorn server started on 0.0.0.0:8501\n",
+            "\u001b[0m\n",
+            "\u001b[34m\u001b[1m  You can now view your Streamlit app in your browser.\u001b[0m\n",
+            "\u001b[0m\n",
+            "\u001b[34m  Local URL: \u001b[0m\u001b[1mhttp://localhost:8501\u001b[0m\n",
+            "\u001b[34m  Network URL: \u001b[0m\u001b[1mhttp://172.28.0.12:8501\u001b[0m\n",
+            "\u001b[34m  External URL: \u001b[0m\u001b[1mhttp://34.29.160.112:8501\u001b[0m\n",
+            "\u001b[0m\n",
+            "\u001b[34m  Stopping...\u001b[0m\n",
+            "^C\n"
+          ]
+        }
+      ]
+    }
+  ]
+}
